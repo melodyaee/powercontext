@@ -47,6 +47,7 @@ else:
     from multiprocessing.popen_spawn_posix import Popen as SpawnPopen
 
 from powercontext._logging import log_safely
+from powercontext.builtin.persistence.cursors import SourceCursorRepository
 from powercontext.builtin.persistence.database import AsyncDatabase
 from powercontext.builtin.persistence.errors import ArtifactProcessingLeadershipLostError
 from powercontext.builtin.persistence.processing_intents import ArtifactProcessingIntentRepository
@@ -57,7 +58,11 @@ from powercontext.builtin.persistence.supervision import (
     ArtifactProcessingLeaseRepository,
     database_utc_now,
 )
-from powercontext.builtin.persistence.tables import ARTIFACT_PROCESSING_INTENTS_TABLE, ARTIFACT_PROCESSING_LEASES_TABLE
+from powercontext.builtin.persistence.tables import (
+    ARTIFACT_PROCESSING_INTENTS_TABLE,
+    ARTIFACT_PROCESSING_LEASES_TABLE,
+    SOURCES_TABLE,
+)
 from powercontext.builtin.runtime.processing_contracts import (
     ArtifactProcessingWorkAssignment,
     ArtifactProcessingWorkerCompletion,
@@ -80,9 +85,30 @@ _RETRY_STATE_LIMIT = 1000
 _CHANNEL_QUEUE_LIMIT = _DISCOVERY_PAGE_SIZE // 2
 _DISCOVERY_PAGE_DELAY_SECONDS = 0.01
 _DISCOVERY_TIMEOUT_SECONDS = 2.0
+_COUNT_ADMISSION_TICK_SECONDS = 0.1
 _SPAWN_SIGTERM_GRACE_SECONDS = 1.0
 _WORKER_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 ProcessingKey = tuple[str, str]
+
+
+async def _pending_source_identity_count(
+    connection: AsyncConnection, scope_id: str, binding_name: str, /
+) -> int:
+    """Count durable journal identities after this processor's successful cursor.
+
+    One Source identity owns exactly one ``pc_sources`` row and one journal
+    position, so replaying a capture or upgrading a receipt's trust never adds
+    to the count. Lineage-only Sources occupy their own row and are included.
+    """
+
+    stored = await SourceCursorRepository().load(connection, scope_id, binding_name)
+    after = 0 if stored is None else int(stored.cursor.sequence)
+    count = await connection.scalar(
+        select(func.count())
+        .select_from(SOURCES_TABLE)
+        .where(SOURCES_TABLE.c.scope_id == scope_id, SOURCES_TABLE.c.journal_position > after)
+    )
+    return int(count or 0)
 
 
 class ArtifactProcessingSupervisorStatus(StrEnum):
@@ -114,6 +140,9 @@ class ArtifactProcessingBinding:
     timezone: str = "Asia/Shanghai"
     config_prefix: str | None = None
     pending_provider: ArtifactProcessingPendingProvider | None = None
+    # Optional per-Family admission floor measured in pending Source journal
+    # identities. Time-based automatic processing remains an independent OR.
+    source_count_threshold: int | None = None
     # Only automatic admission is filtered; already accepted requests retain
     # their own Worker authorization and domain completion semantics.
     automatic_scope_filter: Callable[[AsyncConnection, tuple[str, ...]], Awaitable[frozenset[str]]] | None = None
@@ -656,6 +685,42 @@ class ArtifactProcessingSupervisor:
         else:
             await self._discover_requested(state)
             await self._discover_automatic(state)
+        # Count admission is an independent OR channel: it neither freezes a
+        # scheduled scan nor depends on a dirty generation that a completed
+        # window may already have acknowledged.
+        await self._discover_count(state)
+
+    async def _discover_count(self, state: _FamilyState) -> None:
+        binding = state.binding
+        threshold = binding.source_count_threshold
+        if threshold is None:
+            return
+        capacity = self._fresh_capacity(state)
+        if capacity <= 0:
+            return
+        admitted: list[str] = []
+        async with self._database.transaction() as connection:
+            await self._leases.require_fence(connection, self._require_current_fence())
+            rows = await self._intents.scan(
+                connection,
+                binding.binding_name,
+                after_sequence=0,
+                limit=min(capacity, _DISCOVERY_PAGE_SIZE),
+            )
+            for row in rows:
+                scope = row.scope_id
+                if scope in state.queued or scope in state.running or scope in state.retries:
+                    continue
+                # An invocation already accepted but not yet reaped must not
+                # be accepted a second time just because its cursor is unchanged.
+                if row.requested_generation > row.handled_generation:
+                    continue
+                if await _pending_source_identity_count(connection, scope, binding.binding_name) < threshold:
+                    continue
+                await self._intents.request(connection, scope, binding.binding_name)
+                admitted.append(scope)
+        for scope in admitted:
+            self._enqueue(state, scope)
 
     async def _discover_requested(self, state: _FamilyState) -> None:
         capacity = self._fresh_capacity(state)
@@ -1088,6 +1153,10 @@ class ArtifactProcessingSupervisor:
                 for scope, retry in state.retries.items()
                 if scope not in state.running and scope not in state.queued
             )
+            if state.binding.source_count_threshold is not None:
+                # Count admission has no persisted schedule checkpoint to wake
+                # on, so poll lightly while the Family is not saturated.
+                deadlines.append(now + _COUNT_ADMISSION_TICK_SECONDS)
             if state.overflow_not_before > now:
                 deadlines.append(state.overflow_not_before)
                 continue

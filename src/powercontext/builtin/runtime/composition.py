@@ -86,6 +86,7 @@ from powercontext.builtin.persistence.oceanbase.experience_index import OceanBas
 from powercontext.builtin.persistence.oceanbase.memory_index import (
     OceanBaseMemoryFTSIndex,
     OceanBaseMemoryVectorIndex,
+    OceanBaseSeekDBHybridIndex,
 )
 from powercontext.builtin.persistence.oceanbase.profile import OceanBaseConfig, OceanBaseProfile
 from powercontext.builtin.persistence.oceanbase.topic_memory_index import (
@@ -656,6 +657,10 @@ async def open_builtin_runtime(
         runtime.artifact_processing_supervisor = await resources.enter_async_context(
             _open_artifact_processing_supervisor(config, contexts, processing_bindings, tracing=tracing)
         )
+        from powercontext.builtin.runtime.source_lifecycle import load_disabled_topics
+
+        runtime._lifecycle_database = contexts.database
+        runtime._lifecycle_disabled_topics = await load_disabled_topics(contexts.database)
         contexts.profiles.operation_context = runtime._operation
         if config.handoff_report.enabled:
             runtime.handoff_report = HandoffReportApplication(
@@ -786,6 +791,7 @@ def _artifact_processing_bindings(  # noqa: C901 - validate and assemble one reg
                 pending_provider=None
                 if family == "skill"
                 else SourceProcessingPendingProvider(contexts.database, binding, family),
+                source_count_threshold=getattr(config.runtime, f"{prefix}_source_count_threshold", None),
                 automatic_scope_filter=enabled_profile_scopes if family == "profile" else None,
             )
         )
@@ -961,9 +967,16 @@ async def open_builtin_contexts(
         return
     experience_index = OceanBaseExperienceFTSIndex()
     indexes = [OceanBaseMemoryFTSIndex()]
+    vector_memory_index = None
     if embedding_model is not None:
-        indexes.append(OceanBaseMemoryVectorIndex(embedding_model.profile))
-    index = CompositeMemoryIndex(*indexes)
+        vector_memory_index = OceanBaseMemoryVectorIndex(embedding_model.profile)
+        indexes.append(vector_memory_index)
+    if isinstance(database, SeekDBConfig):
+        # seekdb answers hybrid candidates with one native statement that carries
+        # both the full-text and the vector channel.
+        index = OceanBaseSeekDBHybridIndex(indexes[0], vector_memory_index)
+    else:
+        index = CompositeMemoryIndex(*indexes)
     topic_indexes: list[TopicMemoryIndex] = [OceanBaseTopicMemoryFTSIndex()]
     if embedding_model is not None:
         topic_indexes.append(OceanBaseTopicMemoryVectorIndex(embedding_model.profile))

@@ -30,6 +30,8 @@ from pydantic import BaseModel, JsonValue, ValidationError
 
 from powercontext._logging import log_safely
 from powercontext.artifacts import ArtifactRef
+from powercontext.builtin.runtime.context_pack import ContextPack, ContextPackDelta
+from powercontext.builtin.runtime.source_lifecycle import SourceLifecycleApplication
 from powercontext.builtin.artifacts.experience import (
     EXPERIENCE_INCUBATION_WINDOW_LIMIT,
     Experience,
@@ -846,6 +848,22 @@ class ScopedContextApplication:
             if authorize_scopes is not None:
                 await authorize_scopes((self.scope_id, *scope.context_references))
             return await self._prepare(request, scope)
+
+    async def prepare_incremental(
+        self,
+        request: PrepareContextRequest,
+        /,
+        *,
+        base_pack: ContextPack | None = None,
+        authorize_scopes: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
+    ) -> ContextPack | ContextPackDelta:
+        """Prepare this turn's context as one full pack or one prefix-reuse delta."""
+
+        prepared = await self.prepare(request, authorize_scopes=authorize_scopes)
+        target = ContextPack.from_content(prepared.content or "")
+        if base_pack is None:
+            return target
+        return ContextPackDelta.between(base_pack, target)
 
     async def _prepare(self, request: PrepareContextRequest, scope: ScopeDescriptor, /) -> PreparedContext:
         build, effort = await self._prepare_build(request, scope)
@@ -2683,6 +2701,17 @@ class ScopedTopicMemoryApplication:
                         "unit": "topic-memory",
                     },
                 )
+        disabled = self._runtime._lifecycle_disabled_topics.get(self.scope_id)
+        if disabled and result.hits:
+            result = result.model_copy(
+                update={
+                    "hits": tuple(
+                        hit
+                        for hit in result.hits
+                        if hit.artifact_ref.artifact_id not in disabled
+                    )
+                }
+            )
         return result
 
     async def _search_with_embedding(
@@ -3111,6 +3140,9 @@ class BuiltinRuntime:
         self.memory = MemoryApplication(self)
         self.topic_memory = TopicMemoryApplication(self)
         self.records = RecordApplication(self)
+        self.lifecycle = SourceLifecycleApplication(self)
+        self._lifecycle_database = None
+        self._lifecycle_disabled_topics: dict[str, set[str]] = {}
         self.prompts = PromptApplication(self)
         self.review = ReviewApplication(self)
         self.skill = SkillApplication(self)

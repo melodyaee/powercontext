@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     AnyHttpUrl,
@@ -28,6 +28,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SecretStr,
+    StrictInt,
     field_validator,
     model_validator,
 )
@@ -201,6 +202,10 @@ class RuntimeConfig(BaseModel):
 
     schedule_seconds: float | None = Field(default=None, gt=0)
     memory_schedule_seconds: float | None = Field(default=None, gt=0)
+    # None keeps the historical time-only admission. A set value is a strict
+    # positive integer: booleans, floats, strings, zero and negatives are rejected.
+    memory_source_count_threshold: Annotated[StrictInt, Field(gt=0)] | None = None
+    topic_memory_source_count_threshold: Annotated[StrictInt, Field(gt=0)] | None = None
     experience_schedule_seconds: float | None = Field(default=None, gt=0)
     dream_enabled: bool = True
     dream_max_pending_per_scope: int = Field(default=32, ge=1, le=1000)
