@@ -22,6 +22,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 from urllib.parse import quote, unquote
 
@@ -194,9 +195,13 @@ PDF_PAGE_SOURCE_DEFINITION: SourceDefinition[PDFPageInput, PDFPageSource, PDFPag
 _TOKEN_PATTERN = re.compile(r"[a-z]+|\d+")
 _CORPUS_LIMIT = 4096
 _TARGET_LIMIT = 120
-_RRF_CONSTANT = 60.0
 _BM25_K1 = 1.5
-_BM25_B = 0.75
+_BM25_B = 0.5
+_HEADING_WINDOW = 45
+_HEADING_WEIGHT = 3.0
+_NUMERIC_WEIGHT = 5.0
+_DOCUMENT_WEIGHT = 6.0
+_CONCEPT_WEIGHT = 0.6
 
 # Two-term corpus queries keep the built-in lexical admission floor at one matched term,
 # so a broad, deterministic slice of all persisted pages is available for offline IDF.
@@ -260,14 +265,46 @@ _EXPANSIONS: dict[str, tuple[str, ...]] = {
     "fy": ("fiscal", "year", "annual"),
 }
 
-_NUMERIC_INTENT_TERMS = frozenset(
-    """
-    ebitda ebit capex margin margins revenue revenues income profit loss cost costs expenses
-    amount amounts value values total totals quantity percentage percent ratio rate growth
-    million billions billion cash assets liabilities debt eps expenditures depreciation
-    amortization net gross change increase decreased calculate calculated
-    """.split()
-)
+# Generic finance concepts and the standard wording annual reports use for the
+# corresponding statement or note. These are language-level vocabulary, never
+# document identities, questions, answers or evidence pages.
+_CONCEPT_MAP: dict[str, str] = {
+    "margin": "income", "margins": "income", "profit": "income", "profitability": "income",
+    "ebitda": "income", "ebit": "income", "revenue": "income", "revenues": "income",
+    "sales": "income", "income": "income", "earnings": "income", "eps": "income",
+    "gross": "income", "operating": "income", "unadjusted": "income",
+    "ratio": "balance", "ratios": "balance", "liquidity": "balance", "quick": "balance",
+    "current": "balance", "balance": "balance", "liability": "balance", "liabilities": "balance",
+    "assets": "balance", "debt": "balance", "equity": "balance", "sheet": "balance",
+    "largest": "balance", "healthy": "balance",
+    "cash": "cashflows", "capex": "cashflows", "flows": "cashflows", "flow": "cashflows",
+    "expenditures": "cashflows", "expenditure": "cashflows", "investing": "cashflows",
+    "financing": "cashflows", "activities": "cashflows",
+    "tax": "tax", "taxes": "tax", "rate": "tax", "rates": "tax", "effective": "tax",
+    "customers": "segment", "customer": "segment", "segments": "segment", "segment": "segment",
+    "geographies": "segment", "geography": "segment", "regions": "segment", "region": "segment",
+    "products": "segment", "product": "segment", "categories": "segment", "category": "segment",
+    "services": "segment", "geographic": "segment", "concentration": "segment",
+    "acquisitions": "notes", "acquisition": "notes", "legal": "notes", "litigation": "notes",
+    "lawsuits": "notes", "battles": "notes", "restructuring": "notes", "impairment": "notes",
+    "cyclicality": "notes", "cyclical": "notes", "contingencies": "notes", "proceedings": "notes",
+    "employees": "notes", "workforce": "notes",
+}
+
+_STATEMENT_WORDS: dict[str, tuple[str, ...]] = {
+    "income": ("consolidated", "statements", "income", "operations", "revenues", "expenses", "net", "earnings"),
+    "balance": ("consolidated", "balance", "sheets", "assets", "liabilities", "current", "total", "equity"),
+    "cashflows": (
+        "consolidated", "statements", "cash", "flows", "operating", "investing", "financing", "activities",
+    ),
+    "tax": ("income", "taxes", "tax", "provision", "effective", "rate", "consolidated"),
+    "segment": (
+        "segment", "reportable", "revenues", "business", "geographic", "notes", "data", "customers", "products",
+    ),
+    "notes": (
+        "notes", "consolidated", "financial", "statements", "charges", "litigation", "proceedings", "acquisitions",
+    ),
+}
 
 
 def _question_terms(question: str) -> tuple[str, ...]:
@@ -284,6 +321,10 @@ def _query_weights(terms: tuple[str, ...]) -> dict[str, float]:
         for synonym in _EXPANSIONS.get(term, ()):
             weight = 0.4 if synonym.isdigit() else 0.6
             weights[synonym] = max(weights.get(synonym, 0.0), weight)
+    concepts = {_CONCEPT_MAP[term] for term in terms if term in _CONCEPT_MAP}
+    for concept in concepts:
+        for word in _STATEMENT_WORDS[concept]:
+            weights[word] = max(weights.get(word, 0.0), _CONCEPT_WEIGHT)
     return weights
 
 
@@ -313,17 +354,48 @@ def _location(source_id: str) -> tuple[str, int] | None:
         return None
 
 
+def _document_tokens(text: str) -> tuple[str, ...]:
+    """The leading line of a projected page carries the document identity."""
+    return tuple(_TOKEN_PATTERN.findall(text.split("\n", 1)[0].casefold()))
+
+
+def _document_affinity(
+    terms: tuple[str, ...], document_tokens: tuple[str, ...], idf: Callable[[str], float]
+) -> float:
+    """Generic document-name evidence shared by every page of one report."""
+    affinity = 0.0
+    for term in terms:
+        if len(term) < 3 or term.isdigit():
+            continue
+        for token in document_tokens:
+            if token == term or (len(token) > 4 and token.startswith(term)) or (
+                len(term) > 4 and term.startswith(token)
+            ):
+                affinity += idf(term)
+                break
+    joined = "".join(term for term in terms if not term.isdigit())
+    for token in document_tokens:
+        if len(token) > 8 and token in joined:
+            affinity += 2.0
+    return affinity
+
+
 def _score_pages(
     candidates: dict[tuple[str, str], object],
     weights: dict[str, float],
-    rrf: dict[tuple[str, str], float],
     direct_terms: tuple[str, ...],
-    numeric_intent: bool,
 ) -> list[tuple[str, str]]:
-    tokenized = {key: _TOKEN_PATTERN.findall(getattr(hit, "text", "").casefold()) for key, hit in candidates.items()}
+    tokenized = {
+        key: _TOKEN_PATTERN.findall(getattr(hit, "text", "").casefold())
+        for key, hit in candidates.items()
+    }
     total = len(tokenized)
     if total == 0:
         return []
+    headings = {key: set(tokens[:_HEADING_WINDOW]) for key, tokens in tokenized.items()}
+    document_tokens = {
+        key: _document_tokens(getattr(hit, "text", "")) for key, hit in candidates.items()
+    }
     document_frequency: Counter[str] = Counter()
     for tokens in tokenized.values():
         document_frequency.update(set(tokens))
@@ -334,6 +406,7 @@ def _score_pages(
         return max(0.0, math.log(1.0 + (total - frequency + 0.5) / (frequency + 0.5)))
 
     term_idf = {term: idf(term) for term in weights}
+    contributions = {term: weight * term_idf[term] for term, weight in weights.items()}
     bigrams = tuple(
         (left, right)
         for left, right in zip(direct_terms, direct_terms[1:], strict=False)
@@ -357,10 +430,10 @@ def _score_pages(
         for left, right in bigrams:
             if f"{left} {right}" in joined:
                 score += 0.35 * max(term_idf.get(left, 0.0), term_idf.get(right, 0.0))
-        if numeric_intent and length:
-            digit_ratio = sum(1 for token in tokens if token.isdigit()) / length
-            score += 1.2 * min(digit_ratio / 0.25, 1.0)
-        score += 8.0 * rrf.get(key, 0.0)
+        score += _HEADING_WEIGHT * sum(contributions.get(term, 0.0) for term in headings[key])
+        if length:
+            score += _NUMERIC_WEIGHT * sum(1 for token in tokens if token.isdigit()) / length
+        score += _DOCUMENT_WEIGHT * _document_affinity(direct_terms, document_tokens[key], idf)
         scored.append((score, key))
     scored.sort(key=lambda item: (-item[0], item[1][0], item[1][1]))
     return [key for _score, key in scored]
@@ -369,9 +442,9 @@ def _score_pages(
 async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[MemoryCitation, ...]:
     """Search real Memory entries and return distinct, exactly resolvable page citations.
 
-    Retrieval is entirely offline: short lexical probes collect real Memory hits, page text
-    is reranked with corpus-IDF BM25 plus a generic financial vocabulary expansion, and the
-    final citations are verified against Memory before being returned.
+    Retrieval is entirely offline: broad lexical probes collect the persisted pages, their
+    text is reranked with corpus-IDF BM25, generic financial vocabulary expansion, heading
+    and document evidence, and the final citations are verified against Memory.
     """
 
     from powercontext.builtin.runtime import GetMemoryEntryRequest, MemoryCitation, SearchMemoryRequest
@@ -380,34 +453,26 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
         return ()
     terms = _question_terms(question)
     weights = _query_weights(terms)
-    numeric_intent = any(term in _NUMERIC_INTENT_TERMS or term.isdigit() for term in terms)
 
     candidates: dict[tuple[str, str], object] = {}
-    rrf: dict[tuple[str, str], float] = {}
 
-    async def collect(query: str, pool_limit: int, ranked: bool) -> None:
+    async def collect(query: str, pool_limit: int) -> None:
         try:
             page = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=pool_limit))
         except Exception:  # noqa: BLE001 - an unusable probe must not fail the whole search
             return
-        seen: set[tuple[str, str]] = set()
-        for rank, hit in enumerate(page.hits, start=1):
+        for hit in page.hits:
             key = (hit.entry_id, hit.entry_version_id)
-            if key in seen:
-                continue
-            seen.add(key)
             candidates.setdefault(key, hit)
-            if ranked:
-                rrf[key] = rrf.get(key, 0.0) + 1.0 / (_RRF_CONSTANT + rank)
 
     for query in _CORPUS_QUERIES:
-        await collect(query, _CORPUS_LIMIT, False)
+        await collect(query, _CORPUS_LIMIT)
     for query in _target_queries(question, terms):
-        await collect(query, _TARGET_LIMIT, True)
+        await collect(query, _TARGET_LIMIT)
     if not candidates:
         return ()
 
-    ordered = _score_pages(candidates, weights, rrf, terms, numeric_intent)
+    ordered = _score_pages(candidates, weights, terms)
     selected: list[MemoryCitation] = []
     seen_pages: set[tuple[str, int]] = set()
     for key in ordered:

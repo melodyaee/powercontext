@@ -110,7 +110,12 @@ def _decode_node(row: Any) -> _Node:
 
 
 async def _load_nodes(connection: AsyncConnection, scope_id: str) -> dict[str, _Node]:
-    rows = (await connection.execute(select(_NODES).where(_NODES.c.scope_id == scope_id))).mappings()
+    statement = (
+        select(_NODES)
+        .where(_NODES.c.scope_id == scope_id)
+        .order_by(_NODES.c.node_id)
+    )
+    rows = (await connection.execute(statement)).mappings()
     return {str(row["node_id"]): _decode_node(row) for row in rows}
 
 
@@ -125,15 +130,27 @@ async def _upsert_node(connection: AsyncConnection, scope_id: str, node: _Node) 
 
 
 def _recompute(nodes: dict[str, _Node]) -> set[str]:
-    """Parents are always registered before their derivatives, so one pass closes the DAG."""
+    """Propagate eligibility to a fixed point, independent of row/insertion order.
+
+    A single pass is only correct when every parent happens to be visited before its
+    children. Persisted rows come back ordered by node id, which is frequently *not* a
+    topological order for a 16-20 node graph, so a child whose parent is itself derived
+    would be judged against a stale support set. Availability is monotone here (nodes are
+    only added), so repeated passes always converge in at most ``len(nodes)`` rounds.
+    """
 
     active = {node_id for node_id, node in nodes.items() if node.kind == "source" and node.available}
-    for node_id, node in nodes.items():
-        if node.kind == "source":
-            continue
-        support = tuple(parent in active for parent in node.parents)
-        if all(support) if node.policy == "all" else any(support):
-            active.add(node_id)
+    changed = True
+    while changed:
+        changed = False
+        for node_id, node in nodes.items():
+            if node.kind == "source" or node_id in active:
+                continue
+            support = tuple(parent in active for parent in node.parents)
+            supported = all(support) if node.policy == "all" else any(support)
+            if supported:
+                active.add(node_id)
+                changed = True
     return active
 
 
