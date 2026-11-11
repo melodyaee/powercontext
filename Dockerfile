@@ -9,9 +9,9 @@ WORKDIR /app
 
 # numpy is used purely as a general math library for batch distance arithmetic.
 # No storage engine, SQL engine or vector-index library is installed.
-RUN pip install --no-cache-dir --retries 5 --timeout 60 \
-    --index-url https://pypi.org/simple \
-    --extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+RUN pip install --no-cache-dir --retries 3 --timeout 30 \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --extra-index-url https://pypi.org/simple \
     numpy==2.1.3
 
 COPY minivectordb.py /app/minivectordb.py
