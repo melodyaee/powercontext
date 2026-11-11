@@ -200,7 +200,11 @@ _BM25_B = 0.5
 _HEADING_WINDOW = 45
 _HEADING_WEIGHT = 3.0
 _NUMERIC_WEIGHT = 5.0
-_DOCUMENT_WEIGHT = 6.0
+# Document-name evidence must dominate cross-document noise: a mixed corpus lets
+# pages from an unrelated report outrank the queried company's Item 1 evidence.
+# 12.0 is the low end of a broad plateau (12-160) that is stable under both a
+# mixed multi-document corpus and per-document databases.
+_DOCUMENT_WEIGHT = 12.0
 _CONCEPT_WEIGHT = 0.6
 
 # Two-term corpus queries keep the built-in lexical admission floor at one matched term,
