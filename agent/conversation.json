@@ -1,0 +1,195 @@
+{
+  "meta": {
+    "competition": "2026 OceanBase Database Competition",
+    "challenge": "MiniVectorDB / 加赛赛题一 / questionId=600081",
+    "branch": "2026-competition-round2",
+    "material_type": "real_development_record",
+    "synthetic": false,
+    "student_evidence_status": "PENDING_STUDENT_INPUT",
+    "integrity_note": "本文件记录真实发生的开发过程与真实命令输出。agent_worklog / experiments / retrospective 中的内容由 AI 助手产生，按 agent-learning-evidence-v3-unbounded 规则不能作为学生理解或独立验证的证据，因此单独归类、不计入 student_evidence。student_evidence 目前为空并标记为待补充；未补充前本材料不具备可评分的学生学习证据，评审应据实判定。不编造交互、实验结果或学生理解。",
+    "redaction": "已移除账号、令牌、主机口令等敏感信息；仓库地址与 commit 信息在提交后补充。",
+    "scope_note": "材料覆盖 2026-11-11 加赛实现阶段及随后的 TopK 窗口性能优化。此前 PowerContext 赛题的开发过程不属于本版本材料范围。",
+    "source_fields": "学生原始发言见 user_prompts；AI 侧工作见 agent_worklog；实际命令输出见 experiments。所有引用均可在本 JSON 的字符串字段中定位。"
+  },
+  "user_prompts": [
+    {
+      "id": "U1",
+      "source": "student",
+      "content": "可以帮我完成oceanbase数据库大赛的赛题吗"
+    },
+    {
+      "id": "U2",
+      "source": "student",
+      "content": "这个什么时候截止"
+    },
+    {
+      "id": "U3",
+      "source": "student",
+      "content": "帮我把剩下的题也全写了，拿到初赛的满分"
+    },
+    {
+      "id": "U4",
+      "source": "student",
+      "content": "在被问到参赛信息登记状态时选择：只填了 PowerContext；在剩余时间主攻方向上选择：先稳 240 分 + 攻加赛（推荐）"
+    },
+    {
+      "id": "U5",
+      "source": "status",
+      "content": "以上为本轮真实学生输入。按评分规则，任务委派与方案选择本身不构成可评分的独立理解或验证实例；学生本人在本版本中尚未提交针对加赛的提问、预测、反例、验证设计或复盘。"
+    }
+  ],
+  "agent_worklog": [
+    {
+      "id": "A1",
+      "source": "agent",
+      "role": "assistant",
+      "content": "查赛制：初赛 30 题共 620 分（seekdb 11、PowerContext 11、AI 生态 8）；加赛另有 80 分，由性能排名与 Agent prompt 排名各 40 分构成，且是相对排名分而非完成分。结论：初赛满分在剩余时间内不可达，原因是 seekdb/AI 生态需要独立仓库登记与第三方账号，C++ 内核编译也超出当前 VM 资源。"
+    },
+    {
+      "id": "A2",
+      "source": "agent",
+      "role": "assistant",
+      "content": "定位加赛题包：oceanbase/seekdb 的 2026-competition-round2 分支，含 STDIO_PROTOCOL.md、mysqltest/ 20 个公开用例（95 条 SQL）、protocol_check/run.py、空的 Dockerfile 与 conversation.json。读规范文档 lg8enxlmwg69unt6 得到提交产物、性能口径（1 万条 128 维、1000 次 TopK、K=10、Recall@10>=0.95）与 Agent 材料规则。"
+    },
+    {
+      "id": "A3",
+      "source": "agent",
+      "role": "assistant",
+      "content": "第一版原型用 SQLite 作为存储与查询执行底座，公开用例 20/20 通过、补强测试 19/19 通过。随后读到规范 2.1 明确禁止使用 SQLite / RocksDB 等现成存储引擎，判定该版本不可提交，决定全部重写为自研 append-only 日志 + 按需读取 + undo log 事务 + 崩溃重放 + 自研向量索引。"
+    },
+    {
+      "id": "A4",
+      "source": "agent",
+      "role": "assistant",
+      "content": "重写后修复三类实现缺陷：事务内 staged 行需要可被自身查询读到（read_row 优先 staged）；ORDER BY 允许引用未投影列（排序时回退到原始行 ordinal）；距离并列需按主键升序（先按主键稳定排序，再按距离稳定排序）。三项均由失败或推演发现并复测。"
+    },
+    {
+      "id": "A5",
+      "source": "agent",
+      "role": "assistant",
+      "content": "性能闭环：初测 100 次 TopK 查询耗时 13.05s（130.5ms/query），定位瓶颈为每次查询都从 Python 列表重建 numpy 矩阵。改为惰性重建的缓存 float32 向量索引矩阵 + 一次向量化距离计算 + lexsort 主键并列规则 + 仅投影最终 K 行，复测降到 2.37s（23.7ms/query），并重新跑通全部功能测试确认未改变结果。"
+    },
+    {
+      "id": "A6",
+      "source": "agent",
+      "role": "assistant",
+      "content": "TopK 性能二次闭环：先把 100 次查询按有无 WHERE 分拆，得到无过滤 13.94ms/query、带过滤 35.18ms/query、平均 24.56ms/query，确认瓶颈是过滤时逐行 read_row、全量 lexsort，以及切片前遍历全部 10000 个排序结果。改为距离窗口：np.partition 求边界、纳入所有边界并列行、只对候选按 (distance, primary key) 排序，窗口按 4 倍增长直到凑够 K 个通过过滤的行或覆盖全表；再把每查询的差值/距离数组改为复用 scratch buffer。复测 20/20 官方公开用例（numpy 2.5.3 与 Dockerfile 固定的 2.1.3 各一遍）、19/19 补强、66/66 差分（通用全扫描路径 vs 窗口快速路径）全部通过；bench.py 从 23.7ms/query 降到 6.8ms/query，1000 次查询外推 23.7s -> 6.8s。"
+    }
+  ],
+  "experiments": [
+    {
+      "id": "E1",
+      "source": "tool_result",
+      "command": "python3 protocol_check/run.py --command '[\"<python>\",\"-B\",\"-u\",\"minivectordb.py\",\"{data_dir}\"]' --output <dir>",
+      "stage": "SQLite 原型",
+      "output": "20 个公开用例全部 PASS：sql_crud, sql_comparisons, sql_ordering, sql_empty, sql_primary_key, sql_unicode, sql_bigint, sql_unsupported, storage_restart, vector_euclidean, transaction_commit, transaction_rollback, storage_mutations, storage_multiple_tables, vector_ties_and_filter, vector_float32, vector_index_maintenance, transaction_failed_insert, transaction_autocommit_atomic, transaction_shutdown_rollback。",
+      "interpretation_source": "agent",
+      "interpretation": "功能正确，但随后因规范禁止 SQLite 而整体废弃，未作为提交版本。"
+    },
+    {
+      "id": "E2",
+      "source": "tool_result",
+      "command": "python3 protocol_check/run.py --command '[\"<python>\",\"-B\",\"-u\",\"minivectordb.py\",\"{data_dir}\"]' --output <dir>",
+      "stage": "自研存储版（优化后）",
+      "output": "20 个公开用例全部 PASS，无 FAIL/TIMEOUT。",
+      "interpretation_source": "agent",
+      "interpretation": "自研实现覆盖公开 SQL、持久化、重启、向量、索引维护、事务与关闭回滚。"
+    },
+    {
+      "id": "E3",
+      "source": "tool_result",
+      "command": "python3 extra_checks.py",
+      "stage": "自研存储版（优化后）",
+      "output": "SUMMARY: 19 passed, 0 failed。包含：committed rows survive hard kill / uncommitted changes vanish after crash / recovery survives a second kill / NaN rejected / Infinity rejected / float32 overflow rejected / dimension mismatch rejected / extra dimension rejected / failed inserts leave no rows / SELECT * expands vectors / complex WHERE with IN/AND / L2_DISTANCE inside WHERE / ANN respects filter and returns unique ids / statement failure inside transaction / earlier successful change still commits / 20k rows beyond page cache / large-table query。",
+      "interpretation_source": "agent",
+      "interpretation": "补齐规范 2.3 中公开样例未覆盖的崩溃恢复、非法向量与超缓存数据要求。"
+    },
+    {
+      "id": "E4",
+      "source": "tool_result",
+      "command": "python3 bench.py",
+      "stage": "优化前",
+      "output": "WRITE 10000 rows x 128d: 11.14s；QUERY 100 TopK(10) half filtered: 13.05s (130.5 ms/query)；EXTRAPOLATED 1000 queries: 130.5s。",
+      "interpretation_source": "agent",
+      "interpretation": "按 1000 次查询外推有超时风险，触发 A5 优化。"
+    },
+    {
+      "id": "E5",
+      "source": "tool_result",
+      "command": "python3 bench.py",
+      "stage": "优化后",
+      "output": "WRITE 10000 rows x 128d: 11.19s；QUERY 100 TopK(10) half filtered: 2.37s (23.7 ms/query)；EXTRAPOLATED 1000 queries: 23.7s。",
+      "interpretation_source": "agent",
+      "interpretation": "查询提速约 5.5 倍，并复跑 E2/E3 确认功能结果未变。"
+    },
+    {
+      "id": "E6",
+      "source": "tool_result",
+      "command": "grep -n '不得使用 SQLite' 规范文档",
+      "stage": "规范核对",
+      "output": "规范 2.1：允许使用通用文件、序列化、数学及 SQL 解析库；存储、查询执行、向量索引和事务核心须自行实现，不得使用 SQLite、RocksDB 等现成存储或数据库引擎，也不得调用 Faiss、VSAG、HNSWlib 等现成向量索引库代执行。",
+      "interpretation_source": "agent",
+      "interpretation": "据此废弃 E1 原型，改为自研实现。"
+    },
+    {
+      "id": "E7",
+      "source": "tool_result",
+      "command": "python3 bench_split.py",
+      "stage": "优化前基线分拆",
+      "output": "NO_FILTER 100 queries: 13.94 ms/query；FILTERED 100 queries: 35.18 ms/query；AVERAGE: 24.56 ms/query。",
+      "interpretation_source": "agent",
+      "interpretation": "带过滤查询比无过滤慢约 21ms，说明主要开销在逐行读取并判断过滤条件，其次是全量排序与结果切片。"
+    },
+    {
+      "id": "E8",
+      "source": "tool_result",
+      "command": "python3 window_check.py minivectordb.py",
+      "stage": "窗口算法差分验证",
+      "output": "SUMMARY: 66 passed, 0 failed。覆盖 mixed/ties/sparse/identical 四种表、无过滤/等值/稀疏/空结果/数值范围/距离谓词、K=1/10/25，以及 10000 行全并列、只有 1% 命中却请求 K=25 的窗口增长场景。",
+      "interpretation_source": "agent",
+      "interpretation": "同一引擎分别走通用全扫描路径与窗口快速路径，逐条比对 id 与距离，验证窗口增长与边界并列不破坏 (distance, primary key) 全序。"
+    },
+    {
+      "id": "E9",
+      "source": "tool_result",
+      "command": "python3 bench_split.py && python3 bench.py",
+      "stage": "优化后",
+      "output": "NO_FILTER 100 queries: 4.60 ms/query；FILTERED 100 queries: 5.38 ms/query；AVERAGE: 4.99 ms/query。WRITE 10000 rows x 128d: 10.46s；QUERY 100 TopK(10) half filtered: 0.68s (6.8 ms/query)；EXTRAPOLATED 1000 queries: 6.8s。",
+      "interpretation_source": "agent",
+      "interpretation": "相对 E5 的 23.7ms/query 再提速约 3.5 倍。数值计算路径未变（仍是逐元素 float32 差值与平方和），只改变排序/读取范围与临时数组复用，因此精度与 Recall 不变。"
+    }
+  ],
+  "student_evidence": {
+    "status": "PENDING_STUDENT_INPUT",
+    "instances": [],
+    "note": "按 3.4.2 / 3.4.3，每个可评分实例需要 student_evidence（学生原文）与 result_evidence（实际结果）两类可定位引用，且不能用 Agent 的解释或计划代替。学生本人尚未提供这些内容，故此处留空，不填充任何推测或代写。留空意味着当前版本在五个评价维度上没有有效实例，评审应据实给 0 或标记证据不足。"
+  },
+  "student_contribution_guide": {
+    "purpose": "给学生本人填写，不是已有证据，也不是评分内容。填写后应由学生确认，再随同一 commit 提交。",
+    "suggested_questions": [
+      "为什么规范禁止 SQLite 后，必须连事务和查询执行一起重写，而不能只在 SQLite 外面包一层？请用自己的话解释，并预测如果保留 SQLite 会在哪一类正式用例上暴露。",
+      "为什么 float32 量化会让 [16777217,0] 与 [16777216,0] 的距离变成 0？请预测 vector_float32 用例的输出，再对照 E2 的公开用例结果说明是否一致。",
+      "距离并列时为什么必须按主键升序？如果改成按插入顺序，哪一个公开用例会失败？请指出用例名并说明原因。",
+      "E4 到 E5 的提速来自哪一步？请独立设计一个反例或对照实验验证这个判断（例如去掉缓存矩阵后复测），记录你的预测与实际结果。",
+      "崩溃恢复为什么能在恢复途中再次被杀仍安全？请设计一个与 E3 不同的验证序列，并说明你预期看到什么。",
+      "当前 ann 模式实际是全量精确扫描。请分析它在 Recall@10 与耗时两个指标上的取舍，并说明什么条件下需要换成真实近似索引。",
+      "窗口快速路径为什么必须把「距离等于窗口边界」的所有行都纳入候选，而不能只取 np.argpartition 的前 window 个？请构造一个距离全并列、主键顺序会影响结果的最小反例，并说明 vector_ties_and_filter 用例如何覆盖它。",
+      "对照 E7 与 E9，说明 21ms 的过滤开销来自哪里、窗口算法如何避免它；再独立设计一个过滤命中率远低于 1% 的查询，预测窗口会增长几次、结果是否仍与全扫描一致，并实际运行记录结果。"
+    ],
+    "how_to_record": "每个问题形成一条独立实例：学生原文放进 /student_evidence/instances/<n>/student_quote，对应实际命令输出放进同一实例的 result_quote，并标注所引用的 /experiments/<id> 编号。学生对自己结果的解释、修正与复测写进 interpretation 字段。只有规划没有结果时按 0.5 档规则明确标为计划，不写成已验证。"
+  },
+  "retrospective": {
+    "source": "agent",
+    "note": "以下为 AI 助手的复盘，按规则不构成学生理解证据。",
+    "what_went_wrong": "在读完正式规范前就完成了 SQLite 原型，功能全过但方向违规，等于浪费一版实现。教训是先读提交约束再动手，尤其是明确列出禁止依赖的条款。",
+    "tradeoffs": "append-only 日志让崩溃恢复简单可靠，代价是文件只增不减、更新密集时空间放大；向量矩阵惰性重建让查询快，代价是首次查询有一次 O(N*d) 重建；ann 采用精确扫描换取 100% 召回与实现简洁，代价是查询复杂度不随索引下降。",
+    "open_risks": "正式 29 个用例中 9 个输入未公开，SQL 子集覆盖、VARCHAR 长度语义、错误码冻结映射、容器只读环境下的临时文件路径仍需在预检与首次正式提测中确认。每天只有 2 次正式提测机会，应先用不占次数的环境预检。"
+  },
+  "limitations": [
+    "SQL 解析器只覆盖题面声明的子集，ORDER BY 仅支持单个排序键。",
+    "VARCHAR(n) 的长度约束尚未按 Unicode 字符数实现。",
+    "append-only 日志没有 compaction，长更新负载会持续增长文件。",
+    "ann 与 exact 均为精确扫描，未实现近似索引算法，性能排名不占优势但召回率恒为 1.0。",
+    "本版本尚未完成环境预检与正式提测；E1-E5 均为本地自测结果，不是平台成绩。"
+  ]
+}
