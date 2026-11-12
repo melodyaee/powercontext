@@ -133,7 +133,7 @@ def probe_illegal_vectors(data):
 
 def probe_shutdown_rollback(data):
     s = new_session(data)
-    s.request("CREATE TABLE t (id BIGINT PRIMARY KEY, v VARCHAR(8));")
+    s.request("CREATE TABLE t (id BIGINT PRIMARY KEY, v VARCHAR(16));")
     s.request("INSERT INTO t VALUES (1,'committed');")
     s.request("BEGIN;")
     s.request("INSERT INTO t VALUES (2,'pending');")
