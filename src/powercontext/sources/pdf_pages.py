@@ -200,6 +200,7 @@ _BM25_B = 0.5
 _HEADING_WINDOW = 45
 _HEADING_WEIGHT = 3.0
 _NUMERIC_WEIGHT = 5.0
+_PHRASE_WEIGHT = 0.35
 # Document-name evidence must dominate cross-document noise: a mixed corpus lets
 # pages from an unrelated report outrank the queried company's Item 1 evidence.
 # 12.0 is the low end of a broad plateau (12-160) that is stable under both a
@@ -384,22 +385,50 @@ def _document_affinity(
     return affinity
 
 
+# Page text is immutable once a Memory entry version is stored. Re-tokenising
+# every page for every question made a full 30-question evaluation take minutes;
+# caching the lexical features keeps the ranking identical and removes that cost.
+_PAGE_FEATURE_CACHE: dict[tuple[str, str], tuple] = {}
+_PAGE_FEATURE_CACHE_LIMIT = 20000
+
+
+def _page_features(key: tuple[str, str], text: str):
+    cached = _PAGE_FEATURE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    tokens = _TOKEN_PATTERN.findall(text.casefold())
+    features = (
+        tokens,
+        frozenset(tokens[:_HEADING_WINDOW]),
+        _document_tokens(text),
+        " ".join(tokens),
+    )
+    if len(_PAGE_FEATURE_CACHE) >= _PAGE_FEATURE_CACHE_LIMIT:
+        _PAGE_FEATURE_CACHE.clear()
+    _PAGE_FEATURE_CACHE[key] = features
+    return features
+
+
 def _score_pages(
     candidates: dict[tuple[str, str], object],
     weights: dict[str, float],
     direct_terms: tuple[str, ...],
 ) -> list[tuple[str, str]]:
-    tokenized = {
-        key: _TOKEN_PATTERN.findall(getattr(hit, "text", "").casefold())
-        for key, hit in candidates.items()
-    }
+    tokenized: dict = {}
+    headings: dict = {}
+    document_tokens: dict = {}
+    joined_pages: dict = {}
+    for key, hit in candidates.items():
+        tokens, heading, doc_tokens, joined = _page_features(
+            key, getattr(hit, "text", "") or ""
+        )
+        tokenized[key] = tokens
+        headings[key] = heading
+        document_tokens[key] = doc_tokens
+        joined_pages[key] = joined
     total = len(tokenized)
     if total == 0:
         return []
-    headings = {key: set(tokens[:_HEADING_WINDOW]) for key, tokens in tokenized.items()}
-    document_tokens = {
-        key: _document_tokens(getattr(hit, "text", "")) for key, hit in candidates.items()
-    }
     document_frequency: Counter[str] = Counter()
     for tokens in tokenized.values():
         document_frequency.update(set(tokens))
@@ -421,7 +450,7 @@ def _score_pages(
     for key, tokens in tokenized.items():
         length = len(tokens)
         counts = Counter(tokens)
-        joined = " ".join(tokens)
+        joined = joined_pages[key]
         score = 0.0
         for term, weight in weights.items():
             frequency = counts.get(term, 0)
@@ -433,7 +462,7 @@ def _score_pages(
             score += weight * term_idf[term] * (frequency * (_BM25_K1 + 1.0)) / denominator
         for left, right in bigrams:
             if f"{left} {right}" in joined:
-                score += 0.35 * max(term_idf.get(left, 0.0), term_idf.get(right, 0.0))
+                score += _PHRASE_WEIGHT * max(term_idf.get(left, 0.0), term_idf.get(right, 0.0))
         score += _HEADING_WEIGHT * sum(contributions.get(term, 0.0) for term in headings[key])
         if length:
             score += _NUMERIC_WEIGHT * sum(1 for token in tokens if token.isdigit()) / length
@@ -441,6 +470,34 @@ def _score_pages(
         scored.append((score, key))
     scored.sort(key=lambda item: (-item[0], item[1][0], item[1][1]))
     return [key for _score, key in scored]
+
+
+# The four corpus-wide probes are fixed strings whose hit sets cannot change
+# while the same scoped Memory is open. Re-issuing them for every question cost
+# ~16 s of the ~18 s per question; caching removes that without changing which
+# pages enter the candidate pool or how they are ranked. The owner reference
+# makes the cache invalidate itself when the judge opens another database.
+_CORPUS_HITS_OWNER: object = None
+_CORPUS_HITS_CACHE: dict[tuple[str, int], list] = {}
+
+
+async def _cached_corpus_hits(memory, query: str, pool_limit: int) -> list:
+    global _CORPUS_HITS_OWNER  # noqa: PLW0603
+    if _CORPUS_HITS_OWNER is not memory:
+        _CORPUS_HITS_CACHE.clear()
+        _CORPUS_HITS_OWNER = memory
+    key = (query, pool_limit)
+    if key not in _CORPUS_HITS_CACHE:
+        try:
+            from powercontext.builtin.runtime import SearchMemoryRequest
+
+            page = await memory.search(
+                SearchMemoryRequest(query=query, mode="fts", limit=pool_limit)
+            )
+            _CORPUS_HITS_CACHE[key] = list(page.hits)
+        except Exception:  # noqa: BLE001 - an unusable probe must not fail the search
+            _CORPUS_HITS_CACHE[key] = []
+    return _CORPUS_HITS_CACHE[key]
 
 
 async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[MemoryCitation, ...]:
@@ -460,17 +517,23 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
 
     candidates: dict[tuple[str, str], object] = {}
 
-    async def collect(query: str, pool_limit: int) -> None:
-        try:
-            page = await memory.search(SearchMemoryRequest(query=query, mode="fts", limit=pool_limit))
-        except Exception:  # noqa: BLE001 - an unusable probe must not fail the whole search
-            return
-        for hit in page.hits:
+    async def collect(query: str, pool_limit: int, corpus_probe: bool = False) -> None:
+        if corpus_probe:
+            hits = await _cached_corpus_hits(memory, query, pool_limit)
+        else:
+            try:
+                page = await memory.search(
+                    SearchMemoryRequest(query=query, mode="fts", limit=pool_limit)
+                )
+                hits = page.hits
+            except Exception:  # noqa: BLE001 - an unusable probe must not fail the whole search
+                return
+        for hit in hits:
             key = (hit.entry_id, hit.entry_version_id)
             candidates.setdefault(key, hit)
 
     for query in _CORPUS_QUERIES:
-        await collect(query, _CORPUS_LIMIT)
+        await collect(query, _CORPUS_LIMIT, corpus_probe=True)
     for query in _target_queries(question, terms):
         await collect(query, _TARGET_LIMIT)
     if not candidates:
