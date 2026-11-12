@@ -98,7 +98,7 @@ def parse_vector(raw, dim) -> list[float]:
 def parse_literal(token: str):
     text = token.strip()
     if text.upper() == "NULL":
-        raise DatabaseError("unsupported_sql", "NULL is not part of the supported subset")
+        return None
     if len(text) >= 2 and text[0] in ("'", '"') and text[-1] == text[0]:
         return text[1:-1].replace(text[0] * 2, text[0])
     if re.fullmatch(r"[+-]?\d+", text):
@@ -397,6 +397,10 @@ class Engine:
 
     def coerce(self, table: Table, name: str, value):
         column = self.column(table, name)
+        if value is None:
+            if column["pk"]:
+                raise DatabaseError("null_primary_key", "primary key cannot be NULL")
+            return None
         if column["type"] == "VECTOR":
             return parse_vector(value, column["dim"])
         if column["type"] == "INTEGER":
@@ -581,18 +585,33 @@ class Engine:
     # -- DML ----------------------------------------------------------------
 
     def insert(self, statement: str):
-        match = re.match(r"INSERT\s+INTO\s+(\w+)\s+VALUES\s*(.*)$", statement, re.I | re.S)
+        match = re.match(
+            r"INSERT\s+INTO\s+(\w+)\s*(?:\(([^)]*)\)\s*)?VALUES\s*(.*)$",
+            statement, re.I | re.S,
+        )
         if not match:
             raise DatabaseError("unsupported_sql", "malformed INSERT")
         table = self.table(match.group(1))
+        column_list = match.group(2)
+        if column_list is None:
+            ordinals = list(range(len(table.columns)))
+        else:
+            names = [name.strip() for name in split_top_level(column_list)]
+            ordinals = [self._ordinal(table, name) for name in names]
+            if len(set(ordinals)) != len(ordinals):
+                raise DatabaseError("column_count_mismatch", "duplicate INSERT column")
         rows = []
         keys = []
-        for row_text in split_value_rows(match.group(2).strip()):
+        for row_text in split_value_rows(match.group(3).strip()):
             values = [parse_literal(token) for token in split_top_level(row_text)]
-            if len(values) != len(table.columns):
+            if len(values) != len(ordinals):
                 raise DatabaseError("column_count_mismatch", "INSERT column count mismatch")
-            row = [self.coerce(table, c["name"], v) for c, v in zip(table.columns, values)]
+            row = [None] * len(table.columns)
+            for ordinal, value in zip(ordinals, values):
+                row[ordinal] = self.coerce(table, table.columns[ordinal]["name"], value)
             key = row[self._pk_ordinal(table)]
+            if key is None:
+                raise DatabaseError("null_primary_key", "primary key cannot be NULL")
             if key in table.index:
                 raise DatabaseError("duplicate_key", "duplicate primary key")
             if key in keys:
@@ -652,8 +671,10 @@ class Engine:
             self._stage_many(table, changes)
 
     def _ordinal(self, table: Table, name: str) -> int:
-        return next(i for i, c in enumerate(table.columns)
-                    if c["name"].casefold() == name.casefold())
+        for i, column in enumerate(table.columns):
+            if column["name"].casefold() == name.casefold():
+                return i
+        raise DatabaseError("unknown_column", f"unknown column: {table.name}.{name}")
 
     def _pk_ordinal(self, table: Table) -> int:
         return next(i for i, c in enumerate(table.columns) if c["pk"])
@@ -683,7 +704,7 @@ class Engine:
                 name = in_match.group(1)
                 ordinal = self._ordinal(table, name)
                 values = [parse_literal(v) for v in split_top_level(in_match.group(2))]
-                tests.append(lambda row, o=ordinal, v=values: row[o] in v)
+                tests.append(lambda row, o=ordinal, v=values: row[o] is not None and row[o] in v)
                 continue
             distance = re.match(
                 r"^\s*L2_DISTANCE\s*\(\s*(\w+)\s*,\s*('(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")\s*\)"
@@ -740,6 +761,45 @@ class Engine:
         parts.append("".join(buf))
         return [p for p in parts if p.strip()]
 
+    def _parse_order(self, table: Table, order: str, names: list[str],
+                     projection_items: list) -> list[tuple[str, int, bool]]:
+        """Resolve an ORDER BY list to (source, position, descending) triples.
+
+        `source` is "projection" (index into the output row) or "row" (index
+        into the stored row). Numeric references are 1-based projection
+        positions, as in standard SQL. Every column may carry its own
+        ASC/DESC, and primary-key tie-breaking is applied by the caller.
+        """
+        if not order:
+            return []
+        match = re.match(r"ORDER\s+BY\s+(.*)$", order.strip(), re.I | re.S)
+        if not match:
+            raise DatabaseError("unsupported_sql", f"unsupported ORDER BY: {order}")
+        spec: list[tuple[str, int, bool]] = []
+        for piece in split_top_level(match.group(1).strip().rstrip(";").strip()):
+            item = re.fullmatch(r"\s*(\w+)\s*(ASC|DESC)?\s*", piece, re.I)
+            if not item:
+                raise DatabaseError("unsupported_sql", f"unsupported ORDER BY: {piece}")
+            name = item.group(1)
+            descending = (item.group(2) or "ASC").upper() == "DESC"
+            if name.isdigit():
+                position = int(name) - 1
+                if position < 0 or position >= len(projection_items):
+                    raise DatabaseError("unknown_column", f"ORDER BY position {name} is out of range")
+                spec.append(("projection", position, descending))
+                continue
+            projected = next(
+                (i for i, alias in enumerate(names) if alias.casefold() == name.casefold()),
+                None,
+            )
+            if projected is not None:
+                spec.append(("projection", projected, descending))
+            else:
+                spec.append(("row", self._ordinal(table, name), descending))
+        if not spec:
+            raise DatabaseError("unsupported_sql", f"unsupported ORDER BY: {order}")
+        return spec
+
     # -- SELECT -------------------------------------------------------------
 
     def select(self, statement: str, mode: str):
@@ -747,7 +807,7 @@ class Engine:
         if not match:
             raise DatabaseError("unsupported_sql", "malformed SELECT")
         projection, table, tail = match.group(1), self.table(match.group(2)), match.group(3)
-        where, order, limit = split_clauses(tail)
+        where, order, limit, offset = split_clauses(tail)
 
         projection_items = []   # (output_name, kind, payload)
         pieces = split_top_level(projection)
@@ -778,6 +838,8 @@ class Engine:
                 else:
                     raise DatabaseError("unsupported_sql", f"unsupported projection: {piece}")
 
+        names = [item[0] for item in projection_items]
+        order_spec = self._parse_order(table, order, names, projection_items)
         conditions = self._parse_where(table, where)
 
         # Distance terms are computed with numpy as a math library only.
@@ -791,19 +853,13 @@ class Engine:
         # Fast TopK path: reuse one cached float32 index matrix, do one
         # vectorised distance pass, then order a small nearest-neighbour
         # window instead of sorting and row-reading the entire table.
-        if len(distance_items) == 1 and limit is not None:
+        if len(distance_items) == 1 and limit is not None and offset == 0:
             distance_position, _ordinal, target = distance_items[0]
-            distance_name = projection_items[distance_position][0]
-            order_name, descending = None, False
-            if order:
-                order_match = re.match(
-                    r"ORDER\s+BY\s+(\w+)\s*(ASC|DESC)?", order.strip(), re.I
-                )
-                if order_match:
-                    order_name = order_match.group(1)
-                    descending = (order_match.group(2) or "ASC").upper() == "DESC"
-            if not descending and (
-                order_name is None or order_name.casefold() == distance_name.casefold()
+            # The vectorised TopK path is only legal when the caller explicitly
+            # asked for the distance in ascending order. Without ORDER BY the
+            # result must stay in primary-key order.
+            if len(order_spec) == 1 and order_spec[0] == (
+                "projection", distance_position, False
             ):
                 matrix, keys = table.matrix()
                 if matrix is not None and len(keys):
@@ -887,25 +943,20 @@ class Engine:
                     ))
             rows.append((key, projected, row))
 
-        names = [item[0] for item in projection_items]
-        # A stable sort on the primary key first: every later sort preserves
-        # that order among ties, implementing the required tie-break rule.
+        # A stable sort on the primary key first, then apply ORDER BY keys from
+        # the least significant to the most significant. Python's stable sort
+        # keeps the primary-key ascending tie-break for equal values, including
+        # when a column is DESC.
         rows.sort(key=lambda item: item[0])
-        if order:
-            order_match = re.match(r"ORDER\s+BY\s+(\w+)\s*(ASC|DESC)?", order.strip(), re.I)
-            if not order_match:
-                raise DatabaseError("unsupported_sql", f"unsupported ORDER BY: {order}")
-            order_name = order_match.group(1)
-            descending = (order_match.group(2) or "ASC").upper() == "DESC"
-            projected_positions = [i for i, n in enumerate(names)
-                                   if n.casefold() == order_name.casefold()]
-            if projected_positions:
-                position = projected_positions[0]
-                rows.sort(key=lambda item: _sortable(item[1][position]), reverse=descending)
+        for source, position, descending in reversed(order_spec):
+            if source == "projection":
+                rows.sort(key=lambda item, p=position: _sortable(item[1][p]),
+                          reverse=descending)
             else:
-                # ORDER BY a column that is not projected is still legal.
-                ordinal = self._ordinal(table, order_name)
-                rows.sort(key=lambda item: _sortable(item[2][ordinal]), reverse=descending)
+                rows.sort(key=lambda item, p=position: _sortable(item[2][p]),
+                          reverse=descending)
+        if offset:
+            rows = rows[offset:]
         if limit is not None:
             rows = rows[:limit]
 
@@ -919,10 +970,14 @@ class Engine:
 
 
 def _sortable(value):
+    if value is None:
+        return ""
     return value if isinstance(value, (int, float)) else str(value)
 
 
 def compare(left, right, operator: str) -> bool:
+    if left is None or right is None:
+        return False
     if operator == "=":
         return left == right
     if operator in ("!=", "<>"):
@@ -939,13 +994,27 @@ def compare(left, right, operator: str) -> bool:
 
 
 def split_clauses(tail: str):
+    """Split a SELECT tail into WHERE / ORDER BY / LIMIT / OFFSET.
+
+    Accepts `LIMIT n`, `LIMIT n OFFSET m` and the MySQL form `LIMIT m, n`.
+    Anything that still looks like a clause after extraction is rejected
+    instead of being silently ignored (silent truncation produces wrong
+    result sets rather than a clean error).
+    """
     text = tail.strip().rstrip(";").strip()
     where = order = ""
     limit = None
-    match = re.search(r"\bLIMIT\s+(\d+)\s*$", text, re.I)
+    offset = 0
+    match = re.search(r"\bLIMIT\s+(\d+)\s*,\s*(\d+)\s*$", text, re.I)
     if match:
-        limit = int(match.group(1))
+        offset, limit = int(match.group(1)), int(match.group(2))
         text = text[: match.start()].strip()
+    else:
+        match = re.search(r"\bLIMIT\s+(\d+)(?:\s+OFFSET\s+(\d+))?\s*$", text, re.I)
+        if match:
+            limit = int(match.group(1))
+            offset = int(match.group(2) or 0)
+            text = text[: match.start()].strip()
     match = re.search(r"\bORDER\s+BY\b", text, re.I)
     if match:
         order = "ORDER BY " + text[match.end():].strip()
@@ -953,7 +1022,10 @@ def split_clauses(tail: str):
     match = re.search(r"\bWHERE\b", text, re.I)
     if match:
         where = text[match.end():].strip()
-    return where, order, limit
+        text = text[: match.start()].strip()
+    if text.strip():
+        raise DatabaseError("unsupported_sql", f"unsupported SELECT clause: {text[:60]}")
+    return where, order, limit, offset
 
 
 # --------------------------------------------------------------------------

@@ -26,16 +26,18 @@ competition playoff (MiniVectorDB, question 600081). Branch:
 | Area | Supported |
 | --- | --- |
 | DDL | `CREATE TABLE` with `BIGINT`, `VARCHAR(n)`, `VECTOR(n)` and exactly one `BIGINT PRIMARY KEY`; `CREATE VECTOR INDEX name ON table(vector_column)` |
-| DML | `INSERT ... VALUES (...), (...)`, `SELECT`, `UPDATE ... SET ... WHERE ...`, `DELETE FROM ... WHERE ...` |
+| DML | `INSERT ... VALUES (...), (...)`, with or without an explicit `(col, ...)` list; `SELECT`, `UPDATE ... SET ... WHERE ...`, `DELETE FROM ... WHERE ...` |
 | Projection | column list, `SELECT *`, `L2_DISTANCE(col, '[...]') [AS alias]` |
 | Predicates | `=`, `<`, `<=`, `>`, `>=`, `!=`/`<>`, `IN (...)`, `AND`, and `L2_DISTANCE(...)` comparisons |
-| Ordering | `ORDER BY col [ASC|DESC]`, `LIMIT n`; ties always break by primary key ascending |
+| Ordering | `ORDER BY col [ASC|DESC], ...` (multiple keys, 1-based projection positions, per-key direction), `LIMIT n`, `LIMIT n OFFSET m`, `LIMIT m, n`; ties always break by primary key ascending |
 | Transactions | `BEGIN`, `COMMIT`, `ROLLBACK`; autocommit otherwise |
-| Errors | non-empty semantic codes such as `duplicate_key`, `dimension_mismatch`, `invalid_vector`, `float32_overflow`, `unsupported_sql` |
+| Errors | non-empty semantic codes such as `duplicate_key`, `dimension_mismatch`, `invalid_vector`, `float32_overflow`, `unknown_column`, `unsupported_sql` |
 
-Not supported (returns an error, never silently reinterpreted): NULL, JOIN,
-aggregates, subqueries, `ALTER TABLE`, foreign keys, nested transactions,
-primary-key updates.
+`NULL` is storable in non-key columns and round-trips as JSON `null`; a
+NULL primary key is rejected. Comparisons against NULL follow SQL three-valued
+logic (no match). Not supported (returns an error, never silently
+reinterpreted): JOIN, aggregates, subqueries, `ALTER TABLE`, foreign keys,
+nested transactions, primary-key updates.
 
 ## End-to-end example from an empty data directory
 
@@ -111,7 +113,12 @@ scratch buffers instead of freshly allocated each time.
   PASS** — the TopK window path is compared against the general full-scan path
   over distance ties, sparse and empty filters, numeric and distance
   predicates, K from 1 to 25, and a 10,000-row all-tied table.
-- `python3 bench_split.py`: unfiltered 4.60 ms/query, filtered 5.38
+- `python3 formal_gap_check.py .`: **10/10 PASS** on behaviours the task
+  pack declares as formal requirements but the public pack does not fully
+  cover: NULL literals, explicit INSERT column lists, `ORDER BY 2`, multi-key
+  ORDER BY, `LIMIT ... OFFSET ...`, distance predicates, illegal vectors,
+  BIGINT precision, quoted Unicode, 30,000 rows and filtered ANN.
+- `python3 bench_split.py`: unfiltered 4.50 ms/query, filtered 5.45
   ms/query on 10k x 128d.
 - `python3 bench.py`: 10,000 rows x 128 dimensions written in ~10.5 s; 100
   TopK(10) queries (half with an equality filter) in ~0.68 s, i.e. ~6.8
@@ -119,7 +126,29 @@ scratch buffers instead of freshly allocated each time.
   optimisation).
 
 **Known limitations.** The SQL parser targets the documented subset rather than
-general SQL; `ORDER BY` accepts a single key; VARCHAR length is not enforced;
+general SQL; VARCHAR length is not enforced;
 there is no compaction of the append-only log, so long update-heavy workloads
 grow the file. The `ann` mode is a full exact scan: correct and recall-complete,
 but it does not reduce asymptotic query cost versus `exact`.
+
+## 2026-11-12 correctness fix
+
+The first platform run reached the judge but reported 5 failing formal MySQL
+cases. A probe over the documented SQL subset found three silent-wrong-result
+paths, all now fixed:
+
+- `split_clauses` only recognised a trailing `LIMIT n`, so `LIMIT n OFFSET m`
+  was swallowed and the statement returned every row. LIMIT/OFFSET is now parsed
+  and applied, and an unrecognised trailing clause raises `unsupported_sql`.
+- The vectorised TopK path also fired when no `ORDER BY` was present, silently
+  re-sorting a plain `SELECT ... LIMIT n` by distance. It now requires an explicit
+  ascending ORDER BY on the distance column.
+- `ORDER BY` silently ignored every key after the first, and `ORDER BY 2` raised
+  an empty `sql_error` from an unguarded `next()`. Multiple keys, per-key
+  ASC/DESC and 1-based projection positions are resolved explicitly.
+
+Also added: NULL literals (the protocol specifies JSON `null`), explicit INSERT
+column lists, and `unknown_column` instead of an uncaught `StopIteration`.
+Full regression after the fix: public 20/20 under numpy 2.5.3 and 2.1.3,
+extra 19/19, window differential 66/66, formal gap probes 10/10, and
+bench.py ~7.5 ms/query.
