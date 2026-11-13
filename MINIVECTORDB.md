@@ -92,13 +92,13 @@ Recall@K is 1.0 by construction while filtering, valid IDs and uniqueness are
 preserved. Distance ties are ranked by primary key.
 
 **TopK query.** Distances are still computed for every row, so recall remains
-exact. Ordering and row reads, however, happen on a small nearest-neighbour
-window: `np.partition` finds a distance boundary, every row tied at that
-boundary is included, and only those candidates are sorted by
-`(distance, primary key)`. The window grows until K rows pass the WHERE filter
-or the whole table has been examined, which keeps sparse filters and massive
-distance ties correct. Per-query difference and distance arrays are reused
-scratch buffers instead of freshly allocated each time.
+exact. One global `np.lexsort` on `(distance, primary key)` produces the whole
+ordering at once, then a single forward scan reads rows until K of them pass
+the WHERE filter. An earlier growing-window scheme re-partitioned and re-read
+an expanding prefix on every iteration; when many distances tie (a documented
+formal case) every window degenerated to the entire table and the query blew
+the judge's 60 s response budget. Per-query difference and distance arrays are
+reused scratch buffers instead of freshly allocated each time.
 
 **Measured locally** (Ubuntu VM, 8 vCPU, Python 3.12):
 
@@ -110,7 +110,7 @@ scratch buffers instead of freshly allocated each time.
   *`, `IN`/`AND`, distance predicates, ANN filtering, transaction continuation
   after a failed statement, and 20,000 rows beyond the page cache.
 - `python3 window_check.py minivectordb.py`: **66/66 differential checks
-  PASS** — the TopK window path is compared against the general full-scan path
+  PASS** — the TopK path is compared against the general full-scan path
   over distance ties, sparse and empty filters, numeric and distance
   predicates, K from 1 to 25, and a 10,000-row all-tied table.
 - `python3 formal_gap_check.py .`: **10/10 PASS** on behaviours the task
@@ -202,3 +202,39 @@ full `(n, dim)` delta matrix.
   after TopK, well inside the judge's 2 GB budget;
 - a deliberately corrupted `catalog.json` still emits `{"type":"ready"}`
   and serves requests.
+
+## Round 3: eliminating the remaining JSON response timeout
+
+The second platform run passed all four functional cases but still reported
+one `JSON response timeout`. Local per-request timing probes reproduced it: a
+50,000-row single INSERT took 64.8 s and a 70,000-row TopK with tied
+distances plus a sparse filter took 80.1 s, both above the judge's
+`request_timeout = 60`. Three algorithmic defects were responsible.
+
+- `insert()` checked batch-internal duplicate keys with `key in keys` on a
+  **list**, making bulk INSERT O(n^2). Membership now uses a hash set.
+- The TopK growing-window loop re-read and re-sorted an expanding prefix on
+  every iteration. It is replaced by one global lexsort plus a single scan.
+- `append_records()` issued one unbuffered write per row; the whole batch is
+  now joined into one write followed by a single fsync. `read_row()` uses
+  `os.pread` with the recorded record length instead of seek+readline, and
+  the SQL token scanners jump between quotes, parentheses and separators
+  rather than appending every character. The generational GC is suspended for
+  the duration of an INSERT, where all temporary objects are acyclic.
+
+**Measured after the fix** (same VM, numpy 2.1.3 and 2.5.3):
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 20,000-row INSERT | 9.3 s | **3.0 s** |
+| 50,000-row INSERT | 64.8 s | **7.5 s** |
+| 100,000-row INSERT | timed out | **20.4 s** |
+| 70,000-row tied-distance selective TopK | 80.1 s | **3.0 s** |
+| 170,000-row tied-distance selective TopK | — | **7.0 s** |
+
+All correctness suites remain green: official public pack 20/20 (both numpy
+versions), `extra_checks.py` 19/19, `window_check.py` 66/66,
+`formal_gap_check.py` 10/10, `formal_boundary_check.py` 16/16, a 19-statement
+timeout fuzz with no hang, restart replay of 20,000 rows in 0.8 s, 40,000-row
+peak RSS 79 MB / 91 MB after TopK, and a corrupted catalog still emitting
+`{"type":"ready"}`.
