@@ -1,0 +1,23 @@
+[E-C] 对应 student_contribution_guide 第 7 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python window_check.py minivectordb.py
+------------------------------------------------------------------------
+PASS identical/no_filter/K25
+PASS identical/cat_a/K1
+PASS identical/cat_a/K10
+PASS identical/cat_a/K25
+PASS identical/cat_rare/K1
+PASS identical/cat_rare/K10
+PASS identical/cat_rare/K25
+PASS identical/cat_none/K1
+PASS identical/cat_none/K10
+PASS identical/cat_none/K25
+PASS identical/id_range/K1
+PASS identical/id_range/K10
+PASS identical/id_range/K25
+PASS identical/distance_predicate/K10
+PASS growth/1pct_filter/K10
+PASS growth/1pct_filter/K25_exceeds_matches
+
+SUMMARY: 66 passed, 0 failed
+[exit=0]

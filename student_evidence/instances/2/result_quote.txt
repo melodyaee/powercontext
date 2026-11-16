@@ -1,0 +1,40 @@
+[E-B] 对应 student_contribution_guide 第 3 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python -c 'import json
+from pathlib import Path
+root = Path("/home/cwy/work/powercontext/mysqltest/cases")
+print("--- vector_ties_and_filter.test ---")
+for i, line in enumerate((root / "vector_ties_and_filter.test").read_text().splitlines(), 1):
+    if line.strip():
+        print("%3d: %s" % (i, line))
+print("--- vector_ties_and_filter.result (first 3 assertions) ---")
+data = json.loads((root / "vector_ties_and_filter.result").read_text())
+print(json.dumps(data[:3], ensure_ascii=False, indent=2))
+'
+------------------------------------------------------------------------
+--- vector_ties_and_filter.test ---
+  1: CREATE TABLE docs (id BIGINT PRIMARY KEY, category VARCHAR(8), content VARCHAR(16), embedding VECTOR(2));
+  2: INSERT INTO docs VALUES (8,'keep','八','[1,0]'), (3,'keep','三','[-1,0]'), (1,'skip','一','[0,0]'), (2,'skip','二','[0,0]');
+  3: SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs WHERE category = 'keep' ORDER BY distance LIMIT 1;
+  4: SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs WHERE category = 'keep' ORDER BY distance LIMIT 9;
+  5: SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs WHERE category = 'absent' ORDER BY distance LIMIT 9;
+--- vector_ties_and_filter.result (first 3 assertions) ---
+[
+  {},
+  {
+    "affected_rows": 4
+  },
+  {
+    "columns": [
+      "id",
+      "distance"
+    ],
+    "rows": [
+      [
+        3,
+        1.0
+      ]
+    ]
+  }
+]
+[exit=0]

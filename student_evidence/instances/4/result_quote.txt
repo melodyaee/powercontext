@@ -1,0 +1,8 @@
+[E-D] 对应 student_contribution_guide 第 8 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python bench_split.py /home/cwy/work/powercontext
+------------------------------------------------------------------------
+NO_FILTER 100 queries: 7.26 ms/query
+FILTERED  100 queries: 7.06 ms/query
+AVERAGE              : 7.16 ms/query
+[exit=0]

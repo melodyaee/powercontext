@@ -1,0 +1,102 @@
+
+========================================================================
+[E-A] 对应 student_contribution_guide 第 2 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python -c 'import numpy as np
+a = np.float32(16777217)
+b = np.float32(16777216)
+print("np.float32(16777217) =", a)
+print("np.float32(16777216) =", b)
+print("a - b                =", float(a - b))
+print("L2 distance          =", float(np.sqrt((a - b) ** 2)))
+'
+------------------------------------------------------------------------
+np.float32(16777217) = 1.6777216e+07
+np.float32(16777216) = 1.6777216e+07
+a - b                = 0.0
+L2 distance          = 0.0
+[exit=0]
+========================================================================
+
+========================================================================
+[E-B] 对应 student_contribution_guide 第 3 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python -c 'import json
+from pathlib import Path
+root = Path("/home/cwy/work/powercontext/mysqltest/cases")
+print("--- vector_ties_and_filter.test ---")
+for i, line in enumerate((root / "vector_ties_and_filter.test").read_text().splitlines(), 1):
+    if line.strip():
+        print("%3d: %s" % (i, line))
+print("--- vector_ties_and_filter.result (first 3 assertions) ---")
+data = json.loads((root / "vector_ties_and_filter.result").read_text())
+print(json.dumps(data[:3], ensure_ascii=False, indent=2))
+'
+------------------------------------------------------------------------
+--- vector_ties_and_filter.test ---
+  1: CREATE TABLE docs (id BIGINT PRIMARY KEY, category VARCHAR(8), content VARCHAR(16), embedding VECTOR(2));
+  2: INSERT INTO docs VALUES (8,'keep','八','[1,0]'), (3,'keep','三','[-1,0]'), (1,'skip','一','[0,0]'), (2,'skip','二','[0,0]');
+  3: SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs WHERE category = 'keep' ORDER BY distance LIMIT 1;
+  4: SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs WHERE category = 'keep' ORDER BY distance LIMIT 9;
+  5: SELECT id, L2_DISTANCE(embedding, '[0,0]') AS distance FROM docs WHERE category = 'absent' ORDER BY distance LIMIT 9;
+--- vector_ties_and_filter.result (first 3 assertions) ---
+[
+  {},
+  {
+    "affected_rows": 4
+  },
+  {
+    "columns": [
+      "id",
+      "distance"
+    ],
+    "rows": [
+      [
+        3,
+        1.0
+      ]
+    ]
+  }
+]
+[exit=0]
+========================================================================
+
+========================================================================
+[E-C] 对应 student_contribution_guide 第 7 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python window_check.py minivectordb.py
+------------------------------------------------------------------------
+PASS identical/no_filter/K25
+PASS identical/cat_a/K1
+PASS identical/cat_a/K10
+PASS identical/cat_a/K25
+PASS identical/cat_rare/K1
+PASS identical/cat_rare/K10
+PASS identical/cat_rare/K25
+PASS identical/cat_none/K1
+PASS identical/cat_none/K10
+PASS identical/cat_none/K25
+PASS identical/id_range/K1
+PASS identical/id_range/K10
+PASS identical/id_range/K25
+PASS identical/distance_predicate/K10
+PASS growth/1pct_filter/K10
+PASS growth/1pct_filter/K25_exceeds_matches
+
+SUMMARY: 66 passed, 0 failed
+[exit=0]
+========================================================================
+
+========================================================================
+[E-D] 对应 student_contribution_guide 第 8 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python bench_split.py /home/cwy/work/powercontext
+------------------------------------------------------------------------
+NO_FILTER 100 queries: 7.26 ms/query
+FILTERED  100 queries: 7.06 ms/query
+AVERAGE              : 7.16 ms/query
+[exit=0]
+========================================================================
+
+把以上 4 段输出，连同你自己的预测 / 观察 / 解释原文一起发给助手。
+本脚本只读，不修改任何仓库文件。

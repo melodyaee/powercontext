@@ -1,0 +1,21 @@
+{
+  "id": "S2",
+  "label": "E-B",
+  "source": "student",
+  "question_ref": "/student_contribution_guide/suggested_questions/3",
+  "experiment_refs": [
+    "/experiments/E2"
+  ],
+  "topic": "距离并列时的主键升序规则",
+  "artifact": "vector_ties_and_filter",
+  "verification": "verified",
+  "evidence_tier": "full",
+  "note": "预测与实际结果均已落地；非 0.5 档计划。student_quote 为学生原文逐字，result_quote 为采集脚本真实 stdout 逐字，均未由 AI 改写或代写。",
+  "paths": {
+    "student_quote": "/student_evidence/instances/2/student_quote.txt",
+    "result_quote": "/student_evidence/instances/2/result_quote.txt",
+    "interpretation": "/student_evidence/instances/2/interpretation.txt",
+    "raw_output": "/student_evidence/raw_output_1116.txt"
+  },
+  "recorded_at": "2026-11-16"
+}

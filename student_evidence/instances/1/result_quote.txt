@@ -1,0 +1,16 @@
+[E-A] 对应 student_contribution_guide 第 2 题
+实际执行的命令：
+  /home/cwy/work/powercontext/competition/.venv/bin/python -c 'import numpy as np
+a = np.float32(16777217)
+b = np.float32(16777216)
+print("np.float32(16777217) =", a)
+print("np.float32(16777216) =", b)
+print("a - b                =", float(a - b))
+print("L2 distance          =", float(np.sqrt((a - b) ** 2)))
+'
+------------------------------------------------------------------------
+np.float32(16777217) = 1.6777216e+07
+np.float32(16777216) = 1.6777216e+07
+a - b                = 0.0
+L2 distance          = 0.0
+[exit=0]

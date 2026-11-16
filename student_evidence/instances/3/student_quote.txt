@@ -1,0 +1,6 @@
+我的预测：我猜只取 argpartition 的前 window 个就够了，反正距离全一样。
+实际看到：window_check.py 覆盖 identical 全并列、cat_rare 稀疏过滤、
+growth/1pct_filter 等组合，66 passed / 0 failed，快速路径与全表扫描完全一致。
+我的解释/修正：全并列时「前 window 个」是任意截断，会漏掉主键更小、本该进 LIMIT 的行；
+正确做法是把 distances <= boundary 的所有行都纳入再按 (distance, 主键) 排序。
+我这个预测是错的，差分测试把它证伪了。
