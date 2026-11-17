@@ -51,8 +51,9 @@ def cmd_init(_: argparse.Namespace) -> None:
     con.execute("INSERT OR REPLACE INTO spec VALUES (?,?,?,?)", (
         "SPEC-001", "退款资格边界", spec.read_text(encoding="utf-8"), 1,
     ))
-    for kind, folder in (("code", "sample_project"), ("test", "sample_project")):
-        for p in Path(folder).glob("*.py"):
+    sample_dir = ROOT / "sample_project"
+    for kind in ("code", "test"):
+        for p in sample_dir.glob("*.py"):
             con.execute("INSERT OR REPLACE INTO artifact VALUES (?,?,?)", (kind, p.name, p.read_text(encoding="utf-8")))
     con.commit()
     print(f"initialized {DB_PATH}: spec=1, artifacts={con.execute('SELECT count(*) FROM artifact').fetchone()[0]}")

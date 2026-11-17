@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+minimax/state/
+minimax/devlog/round-01.md
+stepfun/node_modules/
+qoder/records/
+*.db
