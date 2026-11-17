@@ -1,0 +1,14 @@
+{
+  "name": "edge-kb-seekdb",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-local embedding + seekdb hybrid search mini knowledge base",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs"
+  },
+  "dependencies": {
+    "seekdb": "^0.3.0"
+  }
+}

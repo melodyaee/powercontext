@@ -1,0 +1,8 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #f7f8fa; color: #1f2328; }
+main { max-width: 760px; margin: 32px auto; padding: 24px; background: #fff; border: 1px solid #d0d7de; border-radius: 10px; }
+h1 { font-size: 24px; margin-top: 0; } h2 { font-size: 16px; margin-top: 26px; }
+.muted { color: #57606a; font-size: 13px; }
+label { display: block; font-size: 13px; color: #57606a; margin: 8px 0; }
+input, textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #d0d7de; border-radius: 6px; }
+button { font: inherit; padding: 7px 12px; border: 1px solid #0969da; background: #0969da; color: #fff; border-radius: 6px; cursor: pointer; }
+.history-item { border-left: 3px solid #0969da; padding: 8px 12px; margin: 8px 0; background: #f6f8fa; white-space: pre-wrap; }

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>文献速读台 · PowerContext 记忆版</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<main>
+  <h1>文献速读台</h1>
+  <p class="muted">把论文摘要、实验记录和待办集中起来；PowerContext 记住你的关注点，下次打开自动带出。</p>
+
+  <section>
+    <h2>连接 PowerContext</h2>
+    <label>服务地址 <input id="pc-url" value="http://127.0.0.1:8000" /></label>
+    <label>Scope ID <input id="pc-scope" placeholder="从 /v1/scopes 获取" /></label>
+    <button id="connect">保存配置</button>
+    <span id="status" class="muted">未连接</span>
+  </section>
+
+  <section>
+    <h2>今天的阅读记录</h2>
+    <textarea id="note" rows="6" placeholder="粘贴摘要或写下结论…"></textarea>
+    <button id="save">写入记忆</button>
+  </section>
+
+  <section>
+    <h2>我的关注点</h2>
+    <div id="history" class="muted">保存配置后可读取历史。</div>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

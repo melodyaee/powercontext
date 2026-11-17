@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>端侧迷你知识库 · seekdb 混合检索</title>
+<link rel="stylesheet" href="/styles.css" />
+<script type="importmap">
+{
+  "imports": {
+    "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.web.js"
+  }
+}
+</script>
+</head>
+<body>
+<main>
+  <h1>端侧迷你知识库</h1>
+  <p class="muted">文档与查询向量都在你的浏览器里计算；seekdb 负责存储和向量 + 全文混合检索。</p>
+
+  <section>
+    <h2>1. 运行状态</h2>
+    <div id="status" class="status">未初始化</div>
+    <div class="row">
+      <label>seekdb host <input id="db-host" value="127.0.0.1" /></label>
+      <label>port <input id="db-port" value="2881" /></label>
+      <label>user <input id="db-user" value="root" /></label>
+      <label>password <input id="db-pass" type="password" value="" /></label>
+      <label>database <input id="db-name" value="edge_kb" /></label>
+      <button id="init-db">连接 / 建集合</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 导入语料（浏览器本地向量化）</h2>
+    <textarea id="docs" rows="8" placeholder="每行一段文本，或使用下方示例按钮"></textarea>
+    <div class="row">
+      <button id="load-sample">载入示例语料</button>
+      <button id="import-docs">向量化并写入 seekdb</button>
+      <span id="import-progress" class="muted"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. 混合检索</h2>
+    <input id="query" placeholder="例如：如何处理向量检索和关键词检索？" />
+    <button id="search">检索</button>
+    <div id="results"></div>
+  </section>
+
+  <section>
+    <h2>4. 基准（首次 / 预热后分开记录）</h2>
+    <button id="bench">运行一次简易基准</button>
+    <pre id="bench-out"></pre>
+  </section>
+</main>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
