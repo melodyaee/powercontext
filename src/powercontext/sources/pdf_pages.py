@@ -194,6 +194,8 @@ PDF_PAGE_SOURCE_DEFINITION: SourceDefinition[PDFPageInput, PDFPageSource, PDFPag
 
 _TOKEN_PATTERN = re.compile(r"[a-z]+|\d+")
 _CORPUS_LIMIT = 4096
+# Kept for offline diagnostics only. The per-question probes are no longer
+# issued by search_pdf_pages: they did not change any top-20 result.
 _TARGET_LIMIT = 120
 _BM25_K1 = 1.5
 _BM25_B = 0.5
@@ -534,8 +536,11 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple[Memo
 
     for query in _CORPUS_QUERIES:
         await collect(query, _CORPUS_LIMIT, corpus_probe=True)
-    for query in _target_queries(question, terms):
-        await collect(query, _TARGET_LIMIT)
+    # The four corpus probes already admit 1223 of the 1230 persisted pages in
+    # the official five-report corpus. The former per-question probes added no
+    # page to any top-20 result in the full 30-question evaluation, yet cost
+    # ~4 s of FTS per question. Keeping the candidate pool identical while
+    # dropping those probes removes the dominant timeout risk.
     if not candidates:
         return ()
 

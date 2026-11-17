@@ -6,11 +6,12 @@
     "material_type": "real_development_record",
     "synthetic": false,
     "student_evidence_status": "STUDENT_EVIDENCE_PROVIDED",
-    "integrity_note": "本文件记录真实开发过程与真实命令输出。agent_worklog / experiments / retrospective 由 AI 助手产生，按 agent-learning-evidence-v3-unbounded 规则不计入 student_evidence。2026-11-16 学生本人提交 E-A/E-B/E-C/E-D 四段原文，逐字存于 /student_evidence/instances/<n>/student_quote.txt 并登记于 student_evidence.instances；result_quote 为当日 VM 上 student_evidence_kit.py 的真实 stdout（助手代跑采集，逐字全文见 student_evidence/raw_output_1116.txt）。四段均有实际结果，不按 0.5 档计划计。不编造交互、实验结果或学生理解。",
+    "integrity_note": "真实开发记录。agent_worklog / experiments / retrospective 为 AI 助手产出，按 agent-learning-evidence-v3-unbounded 规则不计入 student_evidence。2026-11-16 学生本人提交 E-A/E-B/E-C/E-D 四段原文，逐字存于 /student_evidence/instances/<n>/student_quote.txt；result_quote 为当日 VM 上 student_evidence_kit.py 的真实 stdout（助手代跑采集，全文见 student_evidence/raw_output_1116.txt）。四段均有实际结果，不按 0.5 档计划计。不编造交互、实验结果或学生理解。",
     "redaction": "已移除账号、令牌、主机口令等敏感信息；仓库地址与 commit 信息在提交后补充。",
-    "scope_note": "材料覆盖 2026-11-11 加赛实现阶段及随后的 TopK 窗口性能优化。此前 PowerContext 赛题的开发过程不属于本版本材料范围。",
-    "source_fields": "学生原始发言见 user_prompts；学生证据原文见 student_evidence.instances 与 /student_evidence/instances/<n>/；AI 侧工作见 agent_worklog；实际命令输出见 experiments。",
-    "collection_note": "采集脚本由助手在 VM 执行；学生对照该输出提交原文。助手只整理格式、标注引用、落盘，未替学生撰写 student_quote。"
+    "scope_note": "材料覆盖 2026-11-11 加赛实现及后续 TopK 窗口性能优化。",
+    "source_fields": "学生发言见 user_prompts；学生证据见 student_evidence.instances；AI 工作见 agent_worklog；命令输出见 experiments（为真实 stdout 摘要，全文见 /student_evidence/raw_output_1116.txt）。",
+    "collection_note": "采集脚本由助手在 VM 执行，学生对照输出提交原文；助手只整理格式、标注引用、落盘，未替学生撰写 student_quote。",
+    "ai_content_note": "agent_worklog 与 experiments.interpretation 均为 AI 助手摘要，不计入学生证据。"
   },
   "user_prompts": [
     {
@@ -49,43 +50,37 @@
       "id": "A1",
       "source": "agent",
       "role": "assistant",
-      "content": "查赛制：初赛 30 题 620 分；加赛 80 分由性能与 Agent prompt 排名各 40 分构成。判断初赛满分在剩余时间不可达。",
-      "content_note": "AI 工作日志摘要，不计入 student_evidence。"
+      "content": "查赛制：初赛 30 题 620 分；加赛 80 分由性能与 Agent prompt 排名各 40 分构成。判断初赛满分在剩余时间不可达。"
     },
     {
       "id": "A2",
       "source": "agent",
       "role": "assistant",
-      "content": "定位加赛题包与规范：STDIO 协议、20 个公开用例、性能口径（1 万条 128 维、1000 次 TopK、K=10、Recall@10>=0.95）。",
-      "content_note": "AI 工作日志摘要，不计入 student_evidence。"
+      "content": "定位加赛题包与规范：STDIO 协议、20 个公开用例、性能口径（1 万条 128 维、1000 次 TopK、K=10、Recall@10>=0.95）。"
     },
     {
       "id": "A3",
       "source": "agent",
       "role": "assistant",
-      "content": "SQLite 原型 20/20、19/19 通过后读到规范 2.1 禁止现成存储引擎，废弃并重写为自研 append-only 日志与向量索引。",
-      "content_note": "AI 工作日志摘要，不计入 student_evidence。"
+      "content": "SQLite 原型 20/20、19/19 通过后读到规范 2.1 禁止现成存储引擎，废弃并重写为自研 append-only 日志与向量索引。"
     },
     {
       "id": "A4",
       "source": "agent",
       "role": "assistant",
-      "content": "重写后修复：事务内 staged 行可读、ORDER BY 可引用未投影列、距离并列按主键升序。",
-      "content_note": "AI 工作日志摘要，不计入 student_evidence。"
+      "content": "重写后修复：事务内 staged 行可读、ORDER BY 可引用未投影列、距离并列按主键升序。"
     },
     {
       "id": "A5",
       "source": "agent",
       "role": "assistant",
-      "content": "瓶颈为每查询重建 numpy 矩阵；改为缓存 float32 矩阵 + 向量化距离 + lexsort，130.5 → 23.7 ms/query。",
-      "content_note": "AI 工作日志摘要，不计入 student_evidence。"
+      "content": "瓶颈为每查询重建 numpy 矩阵；改为缓存 float32 矩阵 + 向量化距离 + lexsort，130.5 → 23.7 ms/query。"
     },
     {
       "id": "A6",
       "source": "agent",
       "role": "assistant",
-      "content": "分拆有无 WHERE 开销，改为距离窗口 + scratch buffer；23.7 → 6.8 ms/query，20/20、19/19、66/66 回归通过。",
-      "content_note": "AI 工作日志摘要，不计入 student_evidence。"
+      "content": "分拆有无 WHERE 开销，改为距离窗口 + scratch buffer；23.7 → 6.8 ms/query，20/20、19/19、66/66 回归通过。"
     }
   ],
   "experiments": [
@@ -96,8 +91,7 @@
       "stage": "SQLite 原型",
       "output": "20 个公开用例全部 PASS（含 vector_float32、vector_ties_and_filter）。",
       "interpretation_source": "agent",
-      "interpretation": "功能通过，但因规范禁止 SQLite 而废弃。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "功能通过，但因规范禁止 SQLite 而废弃。"
     },
     {
       "id": "E2",
@@ -106,8 +100,7 @@
       "stage": "自研存储版（优化后）",
       "output": "20 个公开用例全部 PASS，无 FAIL/TIMEOUT。",
       "interpretation_source": "agent",
-      "interpretation": "自研版覆盖公开 SQL、持久化、重启、向量、事务。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "自研版覆盖公开 SQL、持久化、重启、向量、事务。"
     },
     {
       "id": "E3",
@@ -116,8 +109,7 @@
       "stage": "自研存储版（优化后）",
       "output": "SUMMARY: 19 passed, 0 failed（崩溃恢复、非法向量、超缓存数据；明细见 extra_checks.py）。",
       "interpretation_source": "agent",
-      "interpretation": "补齐崩溃恢复、非法向量与超缓存数据要求。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "补齐崩溃恢复、非法向量与超缓存数据要求。"
     },
     {
       "id": "E4",
@@ -126,8 +118,7 @@
       "stage": "优化前",
       "output": "WRITE 10000 rows x 128d: 11.14s；QUERY 100 TopK(10) half filtered: 13.05s (130.5 ms/query)；EXTRAPOLATED 1000 queries: 130.5s。",
       "interpretation_source": "agent",
-      "interpretation": "外推有超时风险，触发 A5 优化。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "外推有超时风险，触发 A5 优化。"
     },
     {
       "id": "E5",
@@ -136,8 +127,7 @@
       "stage": "优化后",
       "output": "WRITE 10000 rows x 128d: 11.19s；QUERY 100 TopK(10) half filtered: 2.37s (23.7 ms/query)；EXTRAPOLATED 1000 queries: 23.7s。",
       "interpretation_source": "agent",
-      "interpretation": "查询提速约 5.5 倍，复跑 E2/E3 结果未变。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "查询提速约 5.5 倍，复跑 E2/E3 结果未变。"
     },
     {
       "id": "E6",
@@ -146,8 +136,7 @@
       "stage": "规范核对",
       "output": "规范 2.1：允许使用通用文件、序列化、数学及 SQL 解析库；存储、查询执行、向量索引和事务核心须自行实现，不得使用 SQLite、RocksDB 等现成存储或数据库引擎，也不得调用 Faiss、VSAG、HNSWlib 等现成向量索引库代执行。",
       "interpretation_source": "agent",
-      "interpretation": "据此废弃 E1 原型。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "据此废弃 E1 原型。"
     },
     {
       "id": "E7",
@@ -156,8 +145,7 @@
       "stage": "优化前基线分拆",
       "output": "NO_FILTER 100 queries: 13.94 ms/query；FILTERED 100 queries: 35.18 ms/query；AVERAGE: 24.56 ms/query。",
       "interpretation_source": "agent",
-      "interpretation": "带过滤比无过滤慢约 21ms，开销在逐行读取与全量排序。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "带过滤比无过滤慢约 21ms，开销在逐行读取与全量排序。"
     },
     {
       "id": "E8",
@@ -166,8 +154,7 @@
       "stage": "窗口算法差分验证",
       "output": "SUMMARY: 66 passed, 0 failed。覆盖 mixed/ties/sparse/identical、多种过滤与 K=1/10/25、1% 命中的窗口增长场景。",
       "interpretation_source": "agent",
-      "interpretation": "全扫描路径与窗口快速路径逐条比对，验证全序不被破坏。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "全扫描路径与窗口快速路径逐条比对，验证全序不被破坏。"
     },
     {
       "id": "E9",
@@ -176,8 +163,7 @@
       "stage": "优化后",
       "output": "NO_FILTER 100 queries: 4.60 ms/query；FILTERED 100 queries: 5.38 ms/query；AVERAGE: 4.99 ms/query。WRITE 10000 rows x 128d: 10.46s；QUERY 100 TopK(10) half filtered: 0.68s (6.8 ms/query)；EXTRAPOLATED 1000 queries: 6.8s。",
       "interpretation_source": "agent",
-      "interpretation": "再提速约 3.5 倍；数值计算路径未变，Recall 不变。",
-      "output_note": "output 为真实 stdout 的摘要；完整输出见对应脚本与 /student_evidence/raw_output_1116.txt。"
+      "interpretation": "再提速约 3.5 倍；数值计算路径未变，Recall 不变。"
     }
   ],
   "student_evidence": {
